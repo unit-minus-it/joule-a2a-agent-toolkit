@@ -587,7 +587,7 @@ applications:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Scaffold a Joule A2A Agent project")
     parser.add_argument("--name", required=True, help="Agent name (kebab-case)")
-    parser.add_argument("--namespace", default="mycompany", help="Capability namespace")
+    parser.add_argument("--namespace", default="joule.ext", help="Capability namespace (must be 'joule.ext' for Joule deployment)")
     parser.add_argument("--output", default=".", help="Output directory")
     parser.add_argument("--description", default="A helpful AI agent", help="Agent description")
     parser.add_argument("--landscape", default="us10", help="CF landscape (us10, eu10, etc.)")

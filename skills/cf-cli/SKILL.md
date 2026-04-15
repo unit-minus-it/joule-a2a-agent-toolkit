@@ -476,6 +476,61 @@ cf remove-plugin-repo CF-Community
 
 Plugin code uses `import "code.cloudfoundry.org/cli/v9/plugin"`.
 
+## MTA / Multiapps Plugin (`cf deploy`)
+
+CAP applications and MTA projects are deployed as `.mtar` archives using the `multiapps` CF CLI plugin. This provides the `cf deploy` command (distinct from `cf push`).
+
+### Install the plugin and build tool
+
+Before running `mbt build` or `cf deploy`, verify both tools are present. Run these checks and install if missing:
+
+```bash
+# Check and install mbt (MTA Build Tool)
+if ! command -v mbt &>/dev/null; then
+  echo "mbt not found — installing..."
+  npm install -g mbt
+else
+  echo "mbt $(mbt --version) already installed"
+fi
+
+# Check and install the multiapps CF CLI plugin
+if ! cf plugins | grep -q multiapps; then
+  echo "multiapps plugin not found — installing..."
+  cf install-plugin multiapps -f
+else
+  echo "multiapps plugin already installed"
+  cf plugins | grep multiapps
+fi
+```
+
+### Build and deploy an MTA
+
+```bash
+# Build the .mtar archive from mta.yaml
+mbt build
+
+# Deploy the archive to the targeted CF org/space
+cf deploy mta_archives/<app>_1.0.0.mtar
+
+# Deploy with verbose output
+cf deploy mta_archives/<app>_1.0.0.mtar -e config.mtaext
+
+# Check deploy status
+cf mta-ops                          # list ongoing MTA operations
+cf mta <mta-id>                     # show MTA status
+cf mtas                             # list all deployed MTAs
+cf undeploy <mta-id> --delete-services  # remove an MTA + its services
+```
+
+### Troubleshooting `cf deploy`
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `unknown command 'deploy'` | multiapps plugin not installed | `cf install-plugin multiapps` |
+| `service plan 'extended' not available` | AI Core extended plan not entitled or org plan restricted | Check BTP entitlements; `extended` plan required for CAP with AI Core |
+| `MTA ID already exists` | Previous deploy left partial state | `cf undeploy <mta-id>` then retry |
+| Build fails with `npm` errors | Node version mismatch in `mta.yaml` | Ensure `engines.node` in `package.json` matches CF buildpack version |
+
 ## Troubleshooting
 
 ### Common Issues

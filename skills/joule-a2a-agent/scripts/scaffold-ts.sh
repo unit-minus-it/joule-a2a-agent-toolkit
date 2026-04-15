@@ -15,7 +15,7 @@ set -euo pipefail
 # ---------- defaults ----------
 NAME=""
 FRAMEWORK="express"
-NAMESPACE="mycompany"
+NAMESPACE="joule.ext"  # IMPORTANT: Joule deployment only works with namespace "joule.ext"
 OUTPUT="."
 DESCRIPTION="A helpful AI agent"
 LANDSCAPE="us10"
@@ -1008,6 +1008,11 @@ create_readme() {
 
 A LangGraph A2A agent on SAP CAP for Joule, powered by SAP GenAI Hub.
 
+## Prerequisites
+
+- \`mbt\` (MTA Build Tool): \`npm install -g mbt\`
+- MTA CF CLI plugin: \`cf install-plugin multiapps\` (required for \`cf deploy\`)
+
 ## Local Development
 
 \`\`\`bash
@@ -1026,15 +1031,19 @@ mbt build
 cf deploy mta_archives/${NAME}_1.0.0.mtar
 \`\`\`
 
+> **Note:** If \`cf deploy\` fails with "unknown command", install the MTA plugin first: \`cf install-plugin multiapps\`
+
 ## Connect to Joule
 
 1. Create BTP destination \`${DEST_NAME}\` pointing to the deployed agent URL
 2. Deploy the Joule capability:
    \`\`\`bash
    cd joule-capability
-   joule login 
+   joule login
    joule deploy ./da.sapdas.yaml --compile -n "${SAFE_NAME}_a2a"
    \`\`\`
+
+> **Note:** The capability namespace in \`joule-capability/capability.sapdas.yaml\` must be \`joule.ext\` — any other value will cause deployment to fail.
 
 ## Customization
 

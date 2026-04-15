@@ -42,8 +42,10 @@ If your Joule tenant runs an older schema version, the compile will succeed but 
 - Joule CLI installed: `npm install -g @sap/joule-studio-cli`
 - CF CLI installed and logged in (`cf login` or `cf login `)
 - Joule CLI logged in (`joule login` or `joule login --use-env`)
+- Joule App2App IAS flow configured for Joule Studio CLI ([assign required roles](https://help.sap.com/docs/joule/integrating-joule-with-sap/assign-roles))
 - BTP roles: `extensibility_developer` + `capabilityadmin` for Joule deployments
 - For CAP agents: `mbt` (MTA Build Tool): `npm install -g mbt`
+- For CAP agents: MTA CF CLI plugin: `cf install-plugin multiapps` (required for `cf deploy` with `.mtar` files)
 
 **Before you start**, make sure Claude Code is started with the toolkit plugin and you are logged in to both CLIs:
 ```bash
@@ -314,3 +316,5 @@ Read these before generating code:
 - Destinations in BTP must use NoAuthentication or OAuth2ClientCredentials.
 - CAP is only available for TypeScript. Python uses Express (Starlette) only.
 - The `da.sapdas.yaml` uses schema version `1.4.0`. The `capability.sapdas.yaml` uses `3.28.0`.
+- **Namespace must be `joule.ext`** — the `metadata.namespace` in `capability.sapdas.yaml` must be set to `joule.ext`. Using any other namespace (e.g. `mycompany`) will cause `joule deploy` to fail with a namespace validation error. The scaffold scripts default to `joule.ext`.
+- CAP agents require two extra tools: **`mbt`** (`npm install -g mbt`) for building and the **MTA CF CLI plugin** (`cf install-plugin multiapps`) for `cf deploy` to work with `.mtar` files. See [CAP deploy to CF guide](https://cap.cloud.sap/docs/guides/deploy/to-cf).

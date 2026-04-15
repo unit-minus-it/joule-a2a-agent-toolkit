@@ -31,11 +31,12 @@ Build, deploy, and connect AI agents to SAP Joule via the A2A (Agent-to-Agent) p
 
 - **cf CLI v8** installed and logged in (`cf login `)
 - **Joule CLI** installed (`npm install -g @sap/joule-studio-cli`) and logged in (`joule login`)
+  - Joule App2App IAS flow must be configured for Joule Studio CLI ([assign roles](https://help.sap.com/docs/joule/integrating-joule-with-sap/assign-roles))
 - **BTP subaccount** with Cloud Foundry runtime, AI Core service, and Destination service
 - **Node.js** v24.x (for TypeScript agents and Joule CLI)
 - **Python 3.12+** (for Python agents only)
-- **jq** (for the destination creation script)
 - **mbt** (MTA Build Tool, for CAP agents only): `npm install -g mbt`
+- **MTA CF CLI Plugin** (for CAP agents only): `cf install-plugin multiapps` — required for `cf deploy` to work with `.mtar` files
 
 ## Getting Started
 
@@ -58,12 +59,25 @@ joule login
 # 1. Scaffold an agent (TypeScript + Express, default)
 /sap-a2a-agent-toolkit:create-agent po-assistant
 
-# 1b. Or scaffold a CAP-based agent
+# 1b. TypeScript + CAP (enterprise, MTA deploy)
 /sap-a2a-agent-toolkit:create-agent po-assistant --framework cap
+
+# 1c. Python agent
+/sap-a2a-agent-toolkit:create-agent po-assistant --lang python
 
 # 2. Customize tools, then deploy everything
 /sap-a2a-agent-toolkit:deploy-agent ./po-assistant
 ```
+
+### `create-agent` Arguments
+
+| Argument | Values | Default | Description |
+|----------|--------|---------|-------------|
+| `<agent-name>` | any kebab-case name | *(required)* | Name of the agent project folder |
+| `--lang` | `typescript`, `python` | `typescript` | Programming language |
+| `--framework` | `express`, `cap` | `express` | Server framework (CAP is TypeScript-only) |
+| `--landscape` | `eu10`, `us10`, `ap10`, … | `eu10` | SAP BTP CF landscape |
+| `--namespace` | any string | `joule.ext` | Capability namespace — **must be `joule.ext`** for Joule deployment |
 
 Or just describe what you want:
 
@@ -87,15 +101,15 @@ User prompt in Joule
   BTP Destination                            OrchestrationClient
 ```
 
-### Framework Options (TypeScript)
+### Framework Options
 
-| | Express (default) | CAP |
-|---|---|---|
-| Server | Express + A2AExpressApp | CAP + cds.on("bootstrap") |
-| Deploy | `cf push` (manifest.yml) | `mbt build` + `cf deploy` (mta.yaml) |
-| Auth | Manual XSUAA setup | Built-in CAP auth |
-| Services | Manual bindings | CDS service definitions |
-| Best for | Lightweight agents, quick prototyping | Enterprise agents, complex service bindings |
+| | Express TS (default) | CAP TS | Python + Express |
+|---|---|---|---|
+| Server | Express + A2AExpressApp | CAP + cds.on("bootstrap") | Starlette + A2AStarletteApplication |
+| Deploy | `cf push` (manifest.yml) | `mbt build` + `cf deploy` (mta.yaml) | `cf push` (manifest.yml) |
+| Auth | Manual XSUAA setup | Built-in CAP auth | Manual XSUAA setup |
+| Services | Manual bindings | CDS service definitions | Manual bindings |
+| Best for | Lightweight agents, quick prototyping | Enterprise agents, complex service bindings | Teams preferring Python |
 
 ## Supported Stack
 
