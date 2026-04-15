@@ -1,0 +1,41 @@
+{
+  "skill_name": "joule-a2a-agent",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I need to build a custom AI agent that can look up product inventory from our SAP S/4HANA system. I want to deploy it on BTP Cloud Foundry and connect it to Joule so our procurement team can ask questions like 'how much of product X do we have in stock?' directly in the Joule chat. We're using SAP GenAI Hub with GPT-4.1. Our CF landscape is eu10.",
+      "expected_output": "A complete TypeScript Express project with: tools.ts containing an inventory lookup tool with Zod schema, agent.ts with SAP GenAI Hub OrchestrationClient, agentCard.ts with inventory skill, manifest.yml for eu10 with AI Core service binding, joule-capability/ with capability.sapdas.yaml (schema 3.28.0), da.sapdas.yaml (schema 1.4.0), functions/call_agent.yaml with agent-request action, scenarios/invoke_agent.yaml.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Create a Joule A2A agent in TypeScript that helps with travel expense reporting — it should be able to check expense status and submit new expense claims. Deploy target is Cloud Foundry on us10. We use SAP GenAI Hub.",
+      "expected_output": "A complete TypeScript Express project with: src/tools.ts containing expense status and submission tools with Zod schemas, src/llm.ts with OrchestrationClient from @sap-ai-sdk/langchain, src/agentCard.ts with two skills, manifest.yml for us10 with nodejs_buildpack, package.json with @a2a-js/sdk 0.3.10 and @langchain/langgraph ^1.2.2, joule-capability/ with multi-file DTA format.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I already have a LangGraph agent running on CF at https://my-agent.cfapps.eu10.hana.ondemand.com. I need to create the Joule capability files and deploy them so Joule can call my agent. The agent helps with expense report approvals. The destination is called ExpenseAgent_A2A.",
+      "expected_output": "A joule-capability/ directory with: capability.sapdas.yaml (schema 3.28.0) referencing destination ExpenseAgent_A2A via system_aliases, da.sapdas.yaml (schema 1.4.0), functions/call_agent.yaml with agent-request action and multi-turn contextId/taskId support, scenarios/invoke_agent.yaml with expense-focused description and capability_context. Step-by-step Joule CLI deployment instructions. Should NOT regenerate the agent project.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Create a TypeScript CAP-based A2A agent for purchase order management using SAP GenAI Hub. It should use the CAP framework with CDS services and MTA deployment. Deploy to eu10.",
+      "expected_output": "A complete CAP TypeScript project with: srv/server.ts using cds.on('bootstrap') to mount A2A endpoints, srv/agent-executor.ts with StateGraph + OrchestrationClient, srv/tools/tools.ts with PO management tools, srv/utils/ with prompts.ts, a2aToLangchain.ts, a2a-operations.ts, mta.yaml with aicore and destination resources, package.json with @sap/cds ^9.7.1 and @a2a-js/sdk 0.3.10, tsconfig.json with ESNext/NodeNext, .cdsrc.sample.json for local dev, joule-capability/ with multi-file DTA format.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Build a Joule A2A agent that handles inventory queries. Use TypeScript with plain Express, not CAP. The agent should have two tools: one for checking stock levels and one for listing low-stock items.",
+      "expected_output": "A TypeScript Express project (no mta.yaml, no @sap/cds) with: src/index.ts using A2AExpressApp, src/tools.ts with two tools (check_stock_levels and list_low_stock_items) using Zod schemas, src/llm.ts with OrchestrationClient, manifest.yml with nodejs_buildpack, package.json with @a2a-js/sdk 0.3.10 and updated SDK versions, agentCard.ts with two matching skills.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "I need the Joule capability files for connecting my existing agent to Joule. Use the multi-file DTA format with contextId/taskId propagation for multi-turn conversations. My destination is called MyAgent_A2A and the agent namespace is com.mycompany.",
+      "expected_output": "A joule-capability/ directory with: capability.sapdas.yaml with schema_version 3.28.0, metadata.namespace com.mycompany, system_aliases pointing to MyAgent_A2A; da.sapdas.yaml with schema_version 1.4.0; functions/call_agent.yaml with agent-request action, body expression for contextId/taskId propagation, set-variables for capturing response; scenarios/invoke_agent.yaml with capability_context for multi-turn persistence.",
+      "files": []
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "sap-a2a-agent-toolkit",
+  "version": "0.2.0",
+  "description": "Full SAP toolkit for building, deploying, and connecting AI agents to SAP Joule via the A2A protocol (v0.3.0) on BTP Cloud Foundry. Supports TypeScript (Express or CAP) and Python agents with LangGraph, SAP GenAI Hub, and automated Joule capability deployment.",
+  "author": {
+    "name": "Arthur Liebhardt"
+  },
+  "keywords": [
+    "sap",
+    "joule",
+    "a2a",
+    "langgraph",
+    "btp",
+    "cloud-foundry",
+    "ai-agent",
+    "cap",
+    "express",
+    "mta",
+    "sap-ai-sdk",
+    "orchestration"
+  ]
+}
