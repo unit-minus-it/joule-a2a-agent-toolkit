@@ -161,6 +161,8 @@ Or manually using `references/langgraph-a2a-agent-cap-typescript.md` + `referenc
 
 #### c) Python + Express
 
+> **Before generating Python agent code**, read `references/troubleshooting.md`. The Python templates use a2a-sdk 0.x APIs that have breaking changes in 1.0.3 (the current release). The troubleshooting file documents every required fix and the correct patterns for 1.0.3.
+
 Run the scaffold script:
 ```bash
 python <skill-path>/scripts/scaffold.py \
@@ -291,6 +293,12 @@ When the user wants to change an existing agent:
 ## Reference Files
 
 Read these before generating code:
+
+### Developer Setup (read first when starting a new project or onboarding a new team member)
+- `references/dev-environment.md` — **Read this before starting development.** Covers: prerequisites per framework (Python venv, Node.js, mbt, multiapps plugin), where to find CF credentials/Joule CLI auth URL/AICORE_SERVICE_KEY in BTP cockpit, how and when to run `cf login` and `joule login`, local `.env` setup, deployment flow per framework, and how to get and read CF logs.
+
+### Troubleshooting (read first when debugging or using Python + a2a-sdk 1.0.3)
+- `references/troubleshooting.md` — **Read this before generating Python agent code or debugging any deployment issue.** Documents every bug hit during real end-to-end development: a2a-sdk 0.x → 1.0.3 breaking changes, the multi-turn conversation fix (`JouleFriendlyRequestHandler`), the correct `call_agent.yaml` response path for SDK 1.0.3, AI Core endpoint differences, BTP destination script failures, and S/4HANA OData v4 field name issues.
 
 ### LangGraph + A2A SDK
 - `references/langgraph-a2a-agent-typescript.md` — TypeScript Express templates (jsonRpcHandler, agentCardHandler, createReactAgent, OrchestrationClient)
