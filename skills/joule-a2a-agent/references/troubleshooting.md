@@ -147,47 +147,94 @@ await updater.update_status(TaskState.TASK_STATE_COMPLETED)
 
 ---
 
-## Bug: `InvalidParamsError: Task <id> is in terminal state: 3` / `TaskNotFoundError: Task <id> not found` — multi-turn conversations stop working after first message
+## Bug: `TaskNotFoundError` / `Task in terminal state` — multi-turn conversations stop working after first message
 
-**Symptom:** The first Joule message in a conversation works. Every follow-up message fails with one of:
+**Symptom:** The first Joule message in a conversation works. Every follow-up message fails. The error differs by SDK and state:
 
 ```
-# Same app instance (task is in store but completed):
+# Python (a2a-sdk 1.0.3) — task still in store but completed:
 InvalidParamsError: Task ea811b38-... is in terminal state: 3
 
-# After app restart (task store is empty, Joule sends stale taskId):
+# Python — after app restart, store empty:
 TaskNotFoundError: Task dcc85776-... not found
+
+# TypeScript (@a2a-js/sdk 0.3.10):
+TaskNotFoundError: Task not found  (JSON-RPC code -32001)
 ```
 
-Both errors are the same root cause — different symptom depending on whether the store is empty.
+**Root cause (both SDKs):** Joule preserves `contextId` and `taskId` across conversation turns and re-sends the completed task's ID on every follow-up. The SDK looks up that `taskId` in the task store and raises immediately because a completed task cannot be reopened.
 
-**Cause:** Joule preserves `contextId` and `taskId` across conversation turns and re-sends the same `taskId` on every follow-up. In `DefaultRequestHandlerV2._setup_active_task()`, the SDK reads `params.message.task_id` and looks it up in the task store (lines 190–196) **before** calling any `RequestContextBuilder`. If the task is completed or not found, it raises immediately.
+The `contextId` is separate — it is the conversation thread identifier used for LangGraph memory. It must be preserved. Only `taskId` must be cleared.
 
-**Wrong first attempt — `RequestContextBuilder`:** Trying to clear the task_id inside a custom `RequestContextBuilder.build()` does NOT work. The builder is called at line 199, after the error at lines 193–196 has already been raised. You will see `TaskNotFoundError` instead of `InvalidParamsError` but the bug is not fixed.
+---
 
-**Correct fix:** Subclass `DefaultRequestHandlerV2` and override `_setup_active_task` to clear the task_id *before* `super()` reads it:
+### Fix — Python (`a2a-sdk 1.0.3`)
+
+In `DefaultRequestHandlerV2._setup_active_task()`, the store lookup happens at lines 190–196 **before** any `RequestContextBuilder` is called (line 199). Clearing `task_id` inside a `RequestContextBuilder` does **not** work — the error has already been raised.
+
+Subclass `DefaultRequestHandlerV2` and clear `task_id` before `super()`:
 
 ```python
 from a2a.server.request_handlers.default_request_handler_v2 import DefaultRequestHandlerV2
 
 class JouleFriendlyRequestHandler(DefaultRequestHandlerV2):
     async def _setup_active_task(self, params, call_context):
-        # Joule reuses taskId across turns. Setting task_id = "" here causes
-        # (params.message.task_id or None) to evaluate to None, skipping the
-        # store lookup. context_id is untouched — conversation memory is preserved.
+        # Joule reuses taskId across turns. Setting task_id = "" causes
+        # (params.message.task_id or None) to evaluate to None, skipping
+        # the store lookup. context_id is untouched — memory is preserved.
         params.message.task_id = ""
         return await super()._setup_active_task(params, call_context)
-```
 
-Use this as the request handler instead of `DefaultRequestHandler`:
-
-```python
 request_handler = JouleFriendlyRequestHandler(
     agent_executor=agent_executor,
     task_store=InMemoryTaskStore(),
     agent_card=agent_card,
 )
 ```
+
+---
+
+### Fix — TypeScript (`@a2a-js/sdk 0.3.10`)
+
+`DefaultRequestHandler.sendMessage()` and `sendMessageStream()` are public overridable methods. Override both and set `params.message.taskId = undefined` before delegating to `super()`:
+
+```typescript
+import {
+  DefaultRequestHandler,
+  InMemoryTaskStore,
+  ServerCallContext,
+} from "@a2a-js/sdk/server";
+
+class JouleFriendlyRequestHandler extends DefaultRequestHandler {
+  override async sendMessage(
+    params: Parameters<DefaultRequestHandler["sendMessage"]>[0],
+    context?: ServerCallContext
+  ) {
+    // Joule reuses taskId across turns, causing TaskNotFoundError (-32001)
+    // when DefaultRequestHandler looks up the previous completed task.
+    // Clearing it here forces a new task per turn while preserving contextId,
+    // which LangGraph uses as thread_id for cross-turn memory.
+    params.message.taskId = undefined;
+    return super.sendMessage(params, context);
+  }
+
+  override async *sendMessageStream(
+    params: Parameters<DefaultRequestHandler["sendMessageStream"]>[0],
+    context?: ServerCallContext
+  ) {
+    params.message.taskId = undefined;
+    yield* super.sendMessageStream(params, context);
+  }
+}
+
+const requestHandler = new JouleFriendlyRequestHandler(
+  agentCard,
+  taskStore,
+  agentExecutor
+);
+```
+
+> **Both `sendMessage` and `sendMessageStream` must be overridden.** Joule uses `sendMessage` when `streaming: false` in the Agent Card and `sendMessageStream` when `streaming: true`. Overriding only one leaves the other broken.
 
 ---
 
@@ -335,7 +382,8 @@ Property 'OrderQuantityUnit' not found in type 'PurchaseOrderItem'
 |---------|-------|-----|
 | `Method not found` (-32601) | Joule calls v0.3 method names; SDK 1.0.3 renamed them | `enable_v0_3_compat=True` in `create_jsonrpc_routes` |
 | `InvalidAgentResponseError` | `update_status()` called before `add_artifact()` | Always call `add_artifact()` first |
-| `Task in terminal state: 3` or `TaskNotFoundError` on 2nd+ message | Joule reuses `taskId`; SDK looks up task before builder can clear it | `JouleFriendlyRequestHandler` — override `_setup_active_task`, set `params.message.task_id = ""` |
+| `Task in terminal state: 3` or `TaskNotFoundError` on 2nd+ message (Python) | Joule reuses `taskId`; SDK looks up task before builder can clear it | `JouleFriendlyRequestHandler` — override `_setup_active_task`, set `params.message.task_id = ""` |
+| `TaskNotFoundError: Task not found` (-32001) on 2nd+ message (TypeScript) | Same root cause; `@a2a-js/sdk` `DefaultRequestHandler` looks up completed task by `taskId` | `JouleFriendlyRequestHandler` — override `sendMessage` + `sendMessageStream`, set `params.message.taskId = undefined` |
 | Blank response in Joule | `call_agent.yaml` reads `status.message`; SDK 1.0.3 puts response in `artifacts` | Use `result.body.artifacts[0].parts[0].text` |
 | App crashes on CF startup | LLM initialized eagerly before `VCAP_SERVICES` is ready | Lazy init — call `get_llm()` only on first request |
 | `Deployment not found` | `AICORE_RESOURCE_GROUP` mismatch | Match to deployment's actual resource group in AI Core console |
