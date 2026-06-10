@@ -171,6 +171,8 @@ Only `dist/`, `package.json`, `tsconfig.json`, `manifest.yml`, and `Procfile` ne
 
 ## 7. BTP Destination Configuration
 
+### Standard (NoAuthentication)
+
 | Property | Value |
 |----------|-------|
 | Name | `MyAgent_A2A` |
@@ -180,6 +182,16 @@ Only `dist/`, `package.json`, `tsconfig.json`, `manifest.yml`, and `Procfile` ne
 | Authentication | NoAuthentication |
 
 Additional property: `HTML5.DynamicDestination` = `true`
+
+### With Principal Propagation (OAuth2UserTokenExchange)
+
+If the agent uses `--with-principal-propagation`, the Joule-facing destination must use `OAuth2UserTokenExchange` instead of `NoAuthentication`. See `skills/principal-propagation/references/pp-btp-config.md` for the full destination configuration.
+
+Also requires two additional service bindings in `manifest.yml`:
+- `<agent-name>-xsuaa` — XSUAA instance created from `xs-security.json`
+- `<agent-name>-destination` — Destination service instance
+
+And a second destination for the CF agent → S/4HANA leg (`OAuth2SAMLBearerAssertion`). See the PP reference for all details.
 
 ---
 

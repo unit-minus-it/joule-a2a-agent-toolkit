@@ -19,6 +19,7 @@ NAMESPACE="joule.ext"  # IMPORTANT: Joule deployment only works with namespace "
 OUTPUT="."
 DESCRIPTION="A helpful AI agent"
 LANDSCAPE="us10"
+WITH_PP="false"  # --with-principal-propagation: adds S/4HANA Public Cloud PP support
 
 # ---------- parse args ----------
 usage() {
@@ -29,14 +30,16 @@ Required:
   --name NAME              Agent name (kebab-case, e.g. po-assistant)
 
 Optional:
-  --framework TYPE         "express" (default) or "cap"
-  --namespace NS           Capability namespace (default: mycompany)
-  --output DIR             Output directory (default: .)
-  --description DESC       Agent description
-  --landscape LAND         CF landscape (default: us10)
+  --framework TYPE             "express" (default) or "cap"
+  --namespace NS               Capability namespace (default: joule.ext)
+  --output DIR                 Output directory (default: .)
+  --description DESC           Agent description
+  --landscape LAND             CF landscape (default: us10)
+  --with-principal-propagation Add S/4HANA Public Cloud principal propagation (Express only)
 
 Examples:
   $(basename "$0") --name po-assistant --framework express --landscape eu10
+  $(basename "$0") --name po-assistant --framework express --landscape eu20 --with-principal-propagation
   $(basename "$0") --name po-assistant --framework cap --namespace com.sap.paa
 EOF
   exit 1
@@ -44,12 +47,13 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --name)        NAME="$2";        shift 2 ;;
-    --framework)   FRAMEWORK="$2";   shift 2 ;;
-    --namespace)   NAMESPACE="$2";   shift 2 ;;
-    --output)      OUTPUT="$2";      shift 2 ;;
-    --description) DESCRIPTION="$2"; shift 2 ;;
-    --landscape)   LANDSCAPE="$2";   shift 2 ;;
+    --name)                       NAME="$2";        shift 2 ;;
+    --framework)                  FRAMEWORK="$2";   shift 2 ;;
+    --namespace)                  NAMESPACE="$2";   shift 2 ;;
+    --output)                     OUTPUT="$2";      shift 2 ;;
+    --description)                DESCRIPTION="$2"; shift 2 ;;
+    --landscape)                  LANDSCAPE="$2";   shift 2 ;;
+    --with-principal-propagation) WITH_PP="true";   shift 1 ;;
     -h|--help)     usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -65,6 +69,11 @@ if [[ "$FRAMEWORK" != "express" && "$FRAMEWORK" != "cap" ]]; then
   exit 1
 fi
 
+if [[ "$WITH_PP" == "true" && "$FRAMEWORK" != "express" ]]; then
+  echo "Warning: --with-principal-propagation is only supported for the Express framework. Ignoring for CAP."
+  WITH_PP="false"
+fi
+
 # ---------- derived values ----------
 BASE="${OUTPUT}/${NAME}"
 SAFE_NAME="${NAME//-/_}"
@@ -74,6 +83,8 @@ APP_ROUTE="${NAME}.${ROUTE_DOMAIN}"
 DEST_NAME="$(echo "${SAFE_NAME}" | perl -pe 's/(^|_)(.)/uc($2)/ge')_A2A"
 CAP_ID="ext.${NAMESPACE}.${SAFE_NAME}"
 ALIAS_NAME="$(echo "${SAFE_NAME}" | perl -pe 's/(^|_)(.)/uc($2)/ge')"
+# Principal propagation destination name (CF agent → S/4HANA)
+PP_S4_DEST="S4_$(echo "${SAFE_NAME}" | tr '[:lower:]' '[:upper:]')_PP"
 
 create_file() {
   local path="$1"
@@ -196,6 +207,15 @@ scaffold_express() {
   local src="${BASE}/src"
   mkdir -p "$src"
 
+  # PP-conditional package.json entries
+  local PP_SDK_DEP=""
+  local PP_SERVICES_MANIFEST=""
+  if [[ "$WITH_PP" == "true" ]]; then
+    PP_SDK_DEP='    "@sap-cloud-sdk/http-client": "^4.0.0",'
+    PP_SERVICES_MANIFEST="      - ${NAME}-xsuaa        # XSUAA for OAuth2UserTokenExchange (cf create-service xsuaa application ${NAME}-xsuaa -c xs-security.json)
+      - ${NAME}-destination  # Destination Service for runtime SAML Bearer resolution (cf create-service destination lite ${NAME}-destination)"
+  fi
+
   # --- package.json ---
   create_file "${BASE}/package.json" <<EOF
 {
@@ -217,6 +237,7 @@ scaffold_express() {
     "@langchain/langgraph": "^1.2.2",
     "@sap-ai-sdk/langchain": "^2.8.0",
     "@sap-ai-sdk/orchestration": "^2.8.0",
+${PP_SDK_DEP}
     "express": "^4.21.0",
     "uuid": "^10.0.0",
     "zod": "^3.25.2"
@@ -268,8 +289,10 @@ applications:
     env:
       MODEL_NAME: gpt-4.1
       NODE_ENV: production
+      AICORE_RESOURCE_GROUP: default
     services:
       - aicore  # TODO: Replace with your AI Core service instance name (run 'cf services' to find it)
+${PP_SERVICES_MANIFEST}
     routes:
       - route: ${APP_ROUTE}
 EOF
@@ -287,8 +310,70 @@ PORT=8080
 # AICORE_SERVICE_KEY={"serviceurls":{"AI_API_URL":"https://..."},"clientid":"...","clientsecret":"...","url":"https://..."}
 EOF
 
-  # --- src/index.ts ---
-  create_file "${src}/index.ts" <<'EOF'
+  # --- src/index.ts --- (PP version includes JWT middleware for principal propagation)
+  if [[ "$WITH_PP" == "true" ]]; then
+    create_file "${src}/index.ts" <<'EOF'
+import express, { Request, Response, NextFunction } from "express";
+import {
+  jsonRpcHandler,
+  agentCardHandler,
+  UserBuilder,
+} from "@a2a-js/sdk/server/express";
+import {
+  DefaultRequestHandler,
+  InMemoryTaskStore,
+  ServerCallContext,
+} from "@a2a-js/sdk/server";
+import { agentCard } from "./agentCard.js";
+import { MyAgentExecutor } from "./executor.js";
+import { userJwtStorage } from "./context.js";
+
+// Joule reuses taskId across conversation turns. Clear it each turn so a fresh
+// task is created, while contextId (LangGraph thread_id) is preserved for memory.
+class JouleFriendlyRequestHandler extends DefaultRequestHandler {
+  override async sendMessage(
+    params: Parameters<DefaultRequestHandler["sendMessage"]>[0],
+    context?: ServerCallContext
+  ) {
+    params.message.taskId = undefined;
+    return super.sendMessage(params, context);
+  }
+  override async *sendMessageStream(
+    params: Parameters<DefaultRequestHandler["sendMessageStream"]>[0],
+    context?: ServerCallContext
+  ) {
+    params.message.taskId = undefined;
+    yield* super.sendMessageStream(params, context);
+  }
+}
+
+const PORT = parseInt(process.env.PORT || "8080", 10);
+const taskStore = new InMemoryTaskStore();
+const agentExecutor = new MyAgentExecutor();
+const requestHandler = new JouleFriendlyRequestHandler(agentCard, taskStore, agentExecutor);
+
+const app = express();
+app.use(express.json());
+
+// Principal propagation: extract the Bearer JWT from each incoming request and
+// store it in AsyncLocalStorage. Tools read it via destOptions() in destination.ts
+// to call S/4HANA as the authenticated Joule user instead of the service account.
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+  const jwt = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+  userJwtStorage.run(jwt, next);
+});
+
+app.use("/.well-known/agent.json", agentCardHandler({ agentCardProvider: async () => agentCard }));
+app.use("/", jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
+
+app.listen(PORT, () => {
+  console.log(`A2A agent server running at http://localhost:${PORT}`);
+  console.log(`Agent card: http://localhost:${PORT}/.well-known/agent.json`);
+});
+EOF
+  else
+    create_file "${src}/index.ts" <<'EOF'
 import express from "express";
 import {
   jsonRpcHandler,
@@ -298,44 +383,47 @@ import {
 import {
   DefaultRequestHandler,
   InMemoryTaskStore,
+  ServerCallContext,
 } from "@a2a-js/sdk/server";
 import { agentCard } from "./agentCard.js";
 import { MyAgentExecutor } from "./executor.js";
 
-const PORT = parseInt(process.env.PORT || "8080", 10);
+// Joule reuses taskId across conversation turns. Clear it each turn so a fresh
+// task is created, while contextId (LangGraph thread_id) is preserved for memory.
+class JouleFriendlyRequestHandler extends DefaultRequestHandler {
+  override async sendMessage(
+    params: Parameters<DefaultRequestHandler["sendMessage"]>[0],
+    context?: ServerCallContext
+  ) {
+    params.message.taskId = undefined;
+    return super.sendMessage(params, context);
+  }
+  override async *sendMessageStream(
+    params: Parameters<DefaultRequestHandler["sendMessageStream"]>[0],
+    context?: ServerCallContext
+  ) {
+    params.message.taskId = undefined;
+    yield* super.sendMessageStream(params, context);
+  }
+}
 
+const PORT = parseInt(process.env.PORT || "8080", 10);
 const taskStore = new InMemoryTaskStore();
 const agentExecutor = new MyAgentExecutor();
-
-const requestHandler = new DefaultRequestHandler(
-  agentCard,
-  taskStore,
-  agentExecutor
-);
+const requestHandler = new JouleFriendlyRequestHandler(agentCard, taskStore, agentExecutor);
 
 const app = express();
 app.use(express.json());
 
-// Agent card at /.well-known/agent.json (required by Joule)
-app.use(
-  "/.well-known/agent.json",
-  agentCardHandler({ agentCardProvider: async () => agentCard })
-);
-
-// A2A JSON-RPC endpoint
-app.use(
-  "/",
-  jsonRpcHandler({
-    requestHandler,
-    userBuilder: UserBuilder.noAuthentication,
-  })
-);
+app.use("/.well-known/agent.json", agentCardHandler({ agentCardProvider: async () => agentCard }));
+app.use("/", jsonRpcHandler({ requestHandler, userBuilder: UserBuilder.noAuthentication }));
 
 app.listen(PORT, () => {
   console.log(`A2A agent server running at http://localhost:${PORT}`);
   console.log(`Agent card: http://localhost:${PORT}/.well-known/agent.json`);
 });
 EOF
+  fi
 
   # --- src/llm.ts ---
   create_file "${src}/llm.ts" <<'EOF'
@@ -353,7 +441,89 @@ export function getLLM() {
 EOF
 
   # --- src/tools.ts ---
-  create_file "${src}/tools.ts" <<'EOF'
+  if [[ "$WITH_PP" == "true" ]]; then
+    # PP-aware template: uses destOptions/fetchCsrfToken for S/4HANA calls
+    create_file "${src}/tools.ts" <<EOF
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
+import { executeHttpRequest } from "@sap-cloud-sdk/http-client";
+import { destOptions, fetchCsrfToken } from "./destination.js";
+
+// ── S/4HANA destination and OData service ────────────────────────────────────
+// Set DESTINATION to the name of your OAuth2SAMLBearerAssertion destination in BTP.
+// Set ODATA_BASE to the OData v2 service base path for the API you are using.
+const DESTINATION = "${PP_S4_DEST}";
+const ODATA_BASE  = "/sap/opu/odata/sap/TODO_SERVICE_SRV";
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Read example ──────────────────────────────────────────────────────────────
+// Replace EntitySet and field names with your actual S/4HANA entity.
+// Drop \$select on first pass and inspect the real field names from a live response.
+const getRecords = tool(
+  async ({ maxResults }) => {
+    try {
+      const response = await executeHttpRequest(destOptions(DESTINATION), {
+        method: "GET",
+        url: \`\${ODATA_BASE}/EntitySet\`,
+        params: { \$format: "json", \$top: String(maxResults ?? 10) },
+        headers: { Accept: "application/json" },
+      });
+      const results: unknown[] = response.data?.d?.results ?? [];
+      if (!results.length) return "No records found.";
+      return JSON.stringify({ count: results.length, results }, null, 2);
+    } catch (error) {
+      const e = error as { response?: { status?: number; data?: unknown }; message?: string };
+      return \`Error: HTTP \${e.response?.status ?? "unknown"} — \${JSON.stringify(e.response?.data ?? e.message)}\`;
+    }
+  },
+  {
+    name: "get_records",
+    description: "Read records from S/4HANA as the authenticated Joule user.",
+    schema: z.object({
+      maxResults: z.number().optional().describe("Maximum records to return (default: 10)"),
+    }),
+  }
+);
+
+// ── Mutating example (POST) ───────────────────────────────────────────────────
+// OData v2 mutations require a CSRF token AND the session cookie from the token fetch.
+// fetchCsrfToken() returns both. Always include the Cookie header in the POST request.
+const createRecord = tool(
+  async ({ field1 }) => {
+    try {
+      const { token, cookie } = await fetchCsrfToken(DESTINATION, ODATA_BASE);
+      const response = await executeHttpRequest(destOptions(DESTINATION), {
+        method: "POST",
+        url: \`\${ODATA_BASE}/EntitySet\`,
+        data: { Field1: field1 },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "x-csrf-token": token,
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+      });
+      return JSON.stringify(response.data?.d ?? { success: true });
+    } catch (error) {
+      const e = error as { response?: { status?: number; data?: unknown }; message?: string };
+      return \`Error: HTTP \${e.response?.status ?? "unknown"} — \${JSON.stringify(e.response?.data ?? e.message)}\`;
+    }
+  },
+  {
+    name: "create_record",
+    description: "Create a record in S/4HANA as the authenticated Joule user.",
+    schema: z.object({
+      field1: z.string().describe("Example field — replace with your actual fields"),
+    }),
+  }
+);
+
+export function getTools() {
+  return [getRecords, createRecord];
+}
+EOF
+  else
+    create_file "${src}/tools.ts" <<'EOF'
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
@@ -374,6 +544,72 @@ export function getTools() {
   return [exampleTool];
 }
 EOF
+  fi
+
+  # --- PP-only files ---
+  if [[ "$WITH_PP" == "true" ]]; then
+    create_file "${src}/context.ts" <<'EOF'
+import { AsyncLocalStorage } from "node:async_hooks";
+
+// Stores the incoming Bearer JWT per request for principal propagation.
+// Set in Express middleware (index.ts) before jsonRpcHandler; read via destOptions().
+export const userJwtStorage = new AsyncLocalStorage<string | undefined>();
+EOF
+
+    create_file "${src}/destination.ts" <<'EOF'
+import { executeHttpRequest } from "@sap-cloud-sdk/http-client";
+import { userJwtStorage } from "./context.js";
+
+/**
+ * Returns destination options for Cloud SDK executeHttpRequest.
+ * Passes the user JWT so BTP resolves OAuth2SAMLBearerAssertion on behalf of
+ * the individual Joule user, not the technical service account.
+ */
+export function destOptions(destinationName: string) {
+  return { destinationName, jwt: userJwtStorage.getStore() };
+}
+
+/**
+ * Fetches a CSRF token and session cookie from an OData v2 service.
+ * OData v2 CSRF tokens are session-bound: both the token and the session cookie
+ * must be forwarded in every mutating request (POST/PUT/DELETE), otherwise
+ * S/4HANA returns HTTP 403 "CSRF token validation failed".
+ */
+export async function fetchCsrfToken(
+  destinationName: string,
+  odataBasePath: string
+): Promise<{ token: string; cookie: string | undefined }> {
+  const response = await executeHttpRequest(destOptions(destinationName), {
+    method: "GET",
+    url: `${odataBasePath}/`,
+    headers: { "x-csrf-token": "Fetch", Accept: "application/json" },
+  });
+  const token = response.headers["x-csrf-token"];
+  if (!token || token === "Required") {
+    throw new Error("Failed to retrieve CSRF token from S/4HANA");
+  }
+  const raw = response.headers["set-cookie"];
+  const cookie = Array.isArray(raw) ? raw.join("; ") : raw;
+  return { token: token as string, cookie };
+}
+EOF
+
+    create_file "${BASE}/xs-security.json" <<EOF
+{
+  "xsappname": "${NAME}",
+  "tenant-mode": "dedicated",
+  "scopes": [],
+  "role-templates": [],
+  "oauth2-configuration": {
+    "token-validity": 43200,
+    "redirect-uris": [
+      "https://${APP_ROUTE}/**"
+    ]
+  }
+}
+EOF
+
+  fi
 
   # --- src/agent.ts ---
   create_file "${src}/agent.ts" <<'EOF'
@@ -1053,7 +1289,66 @@ cf deploy mta_archives/${NAME}_1.0.0.mtar
 4. Edit \`joule-capability/scenarios/invoke_agent.yaml\` — set the scenario description
 EOF
   else
-    create_file "${BASE}/README.md" <<EOF
+    if [[ "$WITH_PP" == "true" ]]; then
+      create_file "${BASE}/README.md" <<EOF
+# ${NAME}
+
+A LangGraph A2A agent on Express for Joule, with S/4HANA Public Cloud principal propagation.
+The authenticated Joule user's identity flows through to S/4HANA — no shared service account.
+
+## Prerequisites (Principal Propagation)
+
+Before deploying, complete the BTP and S/4HANA configuration:
+
+1. **BTP services** — create and bind:
+   \`\`\`bash
+   cf create-service xsuaa application ${NAME}-xsuaa -c xs-security.json
+   cf create-service destination lite ${NAME}-destination
+   \`\`\`
+2. **BTP destinations** — see \`skills/principal-propagation/references/pp-btp-config.md\`
+   - \`${DEST_NAME}\` (OAuth2UserTokenExchange — Joule → this agent)
+   - \`${PP_S4_DEST}\` (OAuth2SAMLBearerAssertion — this agent → S/4HANA)
+3. **S/4HANA setup** — see \`skills/principal-propagation/references/pp-s4hana-setup.md\`
+
+## Local Development
+
+\`\`\`bash
+npm install
+cp .env.example .env
+# Edit .env with your AI Core credentials
+npm run dev
+# Test: curl http://localhost:8080/.well-known/agent.json
+\`\`\`
+
+## Deploy to Cloud Foundry
+
+\`\`\`bash
+cf login -a https://api.cf.${LANDSCAPE}.hana.ondemand.com
+npm install
+npm run build
+cf push
+\`\`\`
+
+## Connect to Joule
+
+The capability destination must use \`OAuth2UserTokenExchange\` (not \`NoAuthentication\`).
+1. Verify destination \`${DEST_NAME}\` is created with \`OAuth2UserTokenExchange\`
+2. Deploy the Joule capability:
+   \`\`\`bash
+   cd joule-capability
+   joule login
+   joule deploy ./da.sapdas.yaml --compile -n "${SAFE_NAME}_a2a"
+   \`\`\`
+
+## Customization
+
+1. Edit \`src/tools.ts\` — replace placeholder entity/service with your S/4HANA API
+2. Edit \`src/agent.ts\` — customize the system prompt
+3. Edit \`src/agentCard.ts\` — update agent card skills
+4. Edit \`joule-capability/scenarios/invoke_agent.yaml\` — set the scenario description
+EOF
+    else
+      create_file "${BASE}/README.md" <<EOF
 # ${NAME}
 
 A LangGraph A2A agent on Express for Joule, powered by SAP GenAI Hub.
@@ -1083,7 +1378,7 @@ cf push
 2. Deploy the Joule capability:
    \`\`\`bash
    cd joule-capability
-   joule login 
+   joule login
    joule deploy ./da.sapdas.yaml --compile -n "${SAFE_NAME}_a2a"
    \`\`\`
 
@@ -1094,6 +1389,7 @@ cf push
 3. Edit \`src/agentCard.ts\` — update agent card skills
 4. Edit \`joule-capability/scenarios/invoke_agent.yaml\` — set the scenario description
 EOF
+    fi
   fi
 }
 
@@ -1118,6 +1414,9 @@ echo ""
 echo "============================================"
 echo " Project scaffolded at: ${BASE}"
 echo " Framework: ${FRAMEWORK}"
+if [[ "$WITH_PP" == "true" ]]; then
+echo " Principal propagation: ENABLED (S/4HANA Public Cloud)"
+fi
 echo "============================================"
 echo ""
 echo "Next steps:"
@@ -1129,8 +1428,17 @@ if [[ "$FRAMEWORK" == "cap" ]]; then
   echo "  5. npm run watch  (local dev)"
 else
   echo "  1. cd ${BASE} && npm install"
+  if [[ "$WITH_PP" == "true" ]]; then
+  echo "  2. Set up BTP services and destinations (see skills/principal-propagation/references/pp-btp-config.md)"
+  echo "  3. Set up S/4HANA (see skills/principal-propagation/references/pp-s4hana-setup.md)"
+  echo "  4. Edit src/tools.ts — replace TODO_SERVICE_SRV and entity set names with your S/4HANA API"
+  echo "  5. Edit src/agent.ts SYSTEM_PROMPT"
+  echo "  6. Edit joule-capability/scenarios/invoke_agent.yaml description"
+  echo "  7. npm run build && cf push"
+  else
   echo "  2. Edit src/tools.ts with your tools"
   echo "  3. Edit src/agent.ts SYSTEM_PROMPT"
   echo "  4. Edit joule-capability/scenarios/invoke_agent.yaml description"
   echo "  5. npm run dev  (local dev)"
+  fi
 fi

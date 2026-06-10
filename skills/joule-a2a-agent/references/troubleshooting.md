@@ -376,6 +376,116 @@ Property 'OrderQuantityUnit' not found in type 'PurchaseOrderItem'
 
 ---
 
+---
+
+## Bug: HTTP 403 — CSRF token validation failed (OData v2 mutations)
+
+**Symptom:** POST / PUT / DELETE to an S/4HANA OData v2 service returns:
+```
+HTTP 403
+"CSRFToken validation failed"
+```
+
+**Cause:** OData v2 CSRF tokens are session-bound. S/4HANA issues a session cookie (`sap-usercontext`) alongside the CSRF token in the `Fetch` response. The subsequent mutating request must include **both** the token (`x-csrf-token` header) **and** the session cookie (`Cookie` header). The Cloud SDK's `executeHttpRequest` does not carry cookies between separate calls, so a plain `x-csrf-token` fetch followed by a POST without the cookie will always fail.
+
+**Fix:** Capture the `set-cookie` header from the CSRF fetch and include it in the POST:
+
+```typescript
+async function fetchCsrfToken(destinationName: string, odataBasePath: string) {
+  const response = await executeHttpRequest(destOptions(destinationName), {
+    method: "GET",
+    url: `${odataBasePath}/`,
+    headers: { "x-csrf-token": "Fetch", Accept: "application/json" },
+  });
+  const token = response.headers["x-csrf-token"];
+  if (!token || token === "Required") throw new Error("Failed to retrieve CSRF token");
+  const raw = response.headers["set-cookie"];
+  const cookie = Array.isArray(raw) ? raw.join("; ") : raw;
+  return { token: token as string, cookie };
+}
+
+// In the mutating tool:
+const { token, cookie } = await fetchCsrfToken(DESTINATION, ODATA_BASE);
+await executeHttpRequest(destOptions(DESTINATION), {
+  method: "POST",
+  url: `${ODATA_BASE}/EntitySet`,
+  data: payload,
+  headers: {
+    "Content-Type": "application/json",
+    "x-csrf-token": token,
+    ...(cookie ? { Cookie: cookie } : {}),
+  },
+});
+```
+
+This pattern is included in the generated `src/destination.ts` when using `--with-principal-propagation`.
+
+---
+
+## Bug: `invalid_grant` — "Error in ST program SAML2_ASSERTION when importing XML data" (S/4HANA PP)
+
+**Symptom:** The OAuth2SAMLBearerAssertion token exchange fails with:
+```json
+{ "error": "invalid_grant", "error_description": "Provided authorization grant is invalid. Exception was Error in ST program SAML2_ASSERTION when importing XML data." }
+```
+
+**Cause:** S/4HANA's ABAP Simple Transformation program `SAML2_ASSERTION` failed to deserialize the SAML assertion XML. This is almost always caused by the **wrong signing certificate** uploaded to the S/4HANA Communication System's OAuth 2.0 Identity Provider.
+
+The most common mistake: downloading the SAML metadata XML from BTP Trust Configuration and trying to upload it to S/4HANA. S/4HANA's ABAP XML parser cannot handle the full metadata XML structure.
+
+**Fix:** Upload only the raw X.509 certificate:
+- Source: **BTP Cockpit → Connectivity → Destination Trust → Active Trust Certificate → Export**
+- This exports a plain `.pem` file
+- Upload this certificate in the S/4HANA Communication System → OAuth 2.0 Identity Provider → Signing Certificate
+
+After uploading the correct certificate, re-trigger the flow. The `invalid_grant` error should resolve.
+
+---
+
+## Bug: `invalid_client` — SAML Issuer mismatch (S/4HANA PP)
+
+**Symptom:**
+```json
+{ "error": "invalid_client", "error_description": "The supplied OAuth 2.0 client credentials are invalid." }
+```
+
+**Cause:** The SAML Issuer configured in S/4HANA's Communication System does not match the entity ID used by BTP Destination Service to sign the assertion.
+
+BTP has **two different SAML entity IDs**:
+- **XSUAA entity** (wrong for PP): `https://<subdomain>.authentication.<region>.hana.ondemand.com`
+- **Destination Service entity** (correct for PP): `cfapps.<region>.hana.ondemand.com/<subaccount-guid>`
+
+The Destination Service signs the SAML assertion with its own entity ID. S/4HANA must have that exact entity ID registered as the SAML Issuer.
+
+**Fix:** In S/4HANA Communication System → OAuth 2.0 Identity Provider, set the SAML Issuer to:
+```
+cfapps.<region>.hana.ondemand.com/<subaccount-guid>
+```
+
+Find your values: region from the CF API URL (e.g. `eu20`, never `eu20-001`); subaccount GUID from BTP Cockpit → subaccount Overview.
+
+---
+
+## Bug: HTTP 400 — Wrong OData v2 field names for S/4HANA
+
+**Symptom:**
+```
+HTTP 400: Property 'RequestedQuantity' is invalid
+HTTP 400: Property 'OrderQuantityUnit' is invalid
+```
+
+**Cause:** OData v2 field names must exactly match the S/4HANA service definition. Common mismatches between what documentation shows, what v4 uses, and what v2 actually accepts:
+
+| Wrong (assumed) | Correct (OData v2) |
+|----------------|-------------------|
+| `RequestedQuantity` | `OrderQuantity` |
+| `OrderQuantityUnit` | `PurchaseOrderQuantityUnit` |
+| `NetPriceCurrency` | not a field — currency inherited from header |
+
+**Fix:** On first integration, drop `$select` and all field filters. Let the API return the full entity. Inspect the actual field names from the live response. Only then add specific fields to your payload or `$select` filter.
+
+---
+
 ## Summary table
 
 | Symptom | Cause | Fix |
@@ -391,4 +501,8 @@ Property 'OrderQuantityUnit' not found in type 'PurchaseOrderItem'
 | `ChatOpenAI` errors on orchestration endpoint | OpenAI protocol ≠ orchestration protocol | Custom `OrchestrationChatModel` subclassing `BaseChatModel` |
 | `RBAC: access denied` | Named resource group not authorized | Use `default` resource group only |
 | `create-destination.sh` fails | CF CLI alias + flat credential structure | Use manual curl steps |
-| `400: Property 'X' not found` from S/4HANA | OData v4 field names differ from v2 | Drop `$select`, inspect live response, confirm field names |
+| `400: Property 'X' not found` from S/4HANA (v4) | OData v4 field names differ from v2 | Drop `$select`, inspect live response, confirm field names |
+| HTTP 403 CSRF token validation failed (OData v2) | Session cookie from CSRF fetch not included in POST | Capture `set-cookie` from CSRF fetch, add as `Cookie` header in POST |
+| `invalid_grant` — ST program SAML2_ASSERTION error | Wrong signing certificate uploaded to S/4HANA | Export Active Trust Certificate from BTP Connectivity → Destination Trust; upload raw PEM only |
+| `invalid_client` (PP) | SAML Issuer mismatch — XSUAA entity used instead of Destination Service entity | Set SAML Issuer to `cfapps.<region>.hana.ondemand.com/<subaccount-guid>` |
+| HTTP 400 — field name invalid (OData v2 POST) | Field name mismatch between docs/v4 and actual OData v2 | Drop all field filters, inspect live response, confirm names |

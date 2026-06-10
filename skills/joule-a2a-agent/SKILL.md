@@ -313,6 +313,31 @@ Read these before generating code:
 ### Joule Integration
 - `references/joule-capability.md` — Multi-file DTA format: capability.sapdas.yaml (schema 3.28.0), da.sapdas.yaml (schema 1.4.0), functions/, scenarios/, multi-turn contextId/taskId pattern
 
+## Principal Propagation (Optional — S/4HANA Public Cloud)
+
+To have the agent call S/4HANA as the authenticated Joule user (not a shared service account), add `--with-principal-propagation` to the scaffold command:
+
+```bash
+bash <skill-path>/scripts/scaffold-ts.sh \
+  --name <agent-name> \
+  --framework express \
+  --landscape <cf-landscape> \
+  --with-principal-propagation
+```
+
+This flag adds to the generated project:
+- `src/context.ts` — AsyncLocalStorage for per-request JWT propagation
+- `src/destination.ts` — `destOptions()` and `fetchCsrfToken()` helpers for S/4HANA OData calls
+- JWT extraction middleware in `src/index.ts`
+- `@sap-cloud-sdk/http-client` dependency
+- `xs-security.json` for XSUAA service creation
+- XSUAA and destination service bindings in `manifest.yml`
+
+**Not supported for CAP or Python** — Express TypeScript only.
+
+For setup instructions (BTP + S/4HANA), read the `principal-propagation` skill:
+`skills/principal-propagation/SKILL.md`
+
 ## Important Notes
 
 - The A2A protocol v0.3.0 uses JSON-RPC 2.0 over HTTP(S). Your agent must handle `message/send` and optionally `message/stream` methods.
