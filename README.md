@@ -13,6 +13,7 @@ Build, deploy, and connect AI agents to SAP Joule via the A2A (Agent-to-Agent) p
 | Skill | Triggers On | What It Does |
 |-------|------------|--------------|
 | **joule-a2a-agent** | "build an agent for Joule", "create A2A agent", "deploy agent to BTP", "CAP agent" | Scaffolds a complete LangGraph agent with A2A support (Express or CAP), CF manifest/MTA, and Joule capability YAML |
+| **principal-propagation** *(custom)* | "principal propagation", "propagate user", "OAuth2SAMLBearerAssertion", "user identity S/4HANA" | Guides setup of end-to-end principal propagation from Joule through BTP to S/4HANA Public Cloud — covers BTP destination config, XSUAA/destination service instances, and S/4HANA Communication System/Arrangement steps |
 | **btp-cli** | "btp", "BTP CLI", subaccount management, entitlements | Generates correct `btp` commands for managing BTP global accounts, subaccounts, services, and security |
 | **cf-cli** | "cf push", "Cloud Foundry", app deployment, service binding | Generates correct `cf` commands for deploying apps, managing services, routes, and spaces |
 | **joule-cli** | "joule deploy", "joule compile", capability deployment | Generates correct Joule CLI commands for compiling and deploying digital assistant capabilities |
@@ -63,6 +64,9 @@ joule login
 # 1c. Python agent
 /sap-a2a-agent-toolkit:create-agent po-assistant --lang python
 
+# 1d. TypeScript + Express with principal propagation (custom addition — see note below)
+/sap-a2a-agent-toolkit:create-agent po-assistant --with-principal-propagation
+
 # 2. Customize tools, then deploy everything
 /sap-a2a-agent-toolkit:deploy-agent ./po-assistant
 ```
@@ -76,6 +80,7 @@ joule login
 | `--framework` | `express`, `cap` | `express` | Server framework (CAP is TypeScript-only) |
 | `--landscape` | `eu10`, `us10`, `ap10`, … | `eu10` | SAP BTP CF landscape |
 | `--namespace` | any string | `joule.ext` | Capability namespace — **must be `joule.ext`** for Joule deployment |
+| `--with-principal-propagation` | flag (no value) | *(off)* | **Custom addition.** TypeScript + Express only. Generates all infrastructure for OAuth2SAMLBearerAssertion-based principal propagation to S/4HANA Public Cloud: `context.ts`, `destination.ts`, JWT middleware in `index.ts`, XSUAA `xs-security.json`, and a `manifest.yml` with the three required service bindings. See `skills/principal-propagation/` for the full setup guide. |
 
 Or just describe what you want:
 
