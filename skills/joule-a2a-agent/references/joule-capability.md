@@ -288,7 +288,9 @@ joule login --use-env
 joule login --authurl <AUTH_URL> --clientid <ID> --clientsecret <SECRET> --username <USER> --password <PASS>
 ```
 
-### Compile + Deploy
+### Compile + Deploy — custom assistant
+
+For a custom or user-created assistant (the default case):
 
 ```bash
 # Navigate to the directory containing da.sapdas.yaml
@@ -302,13 +304,51 @@ joule compile ./                      # compiles → .daar
 joule deploy ./da.sapdas.yaml         # deploys the .daar
 ```
 
+### Deploy to the general / system assistant (`sap_digital_assistant`)
+
+The system-level `sap_digital_assistant` (and other platform-managed assistants) rejects `joule deploy`
+with **error 5015 – "Request is not allowed with bot name"**. Use `joule update` instead:
+
+```bash
+cd joule-capability
+
+# Compile and push to the general assistant in one step
+joule update sap_digital_assistant --capability-file ./capability.sapdas.yaml
+```
+
+`joule update` accepts either a pre-compiled `.daar` file or the source `capability.sapdas.yaml` directly
+(it will compile automatically when given the `.yaml`). The `da.sapdas.yaml` entry point is **not** accepted here.
+
+To verify the capability was added:
+
+```bash
+joule get sap_digital_assistant
+```
+
+> **When to use which command:**
+> - `joule deploy --compile -n "<name>"` → custom assistants you own (e.g. `my_agent_a2a`)
+> - `joule update <name> --capability-file ./capability.sapdas.yaml` → `sap_digital_assistant` and other system assistants
+
 ### Other commands
 
 ```bash
-joule list              # List deployed capabilities
+joule list              # List all deployed digital assistants in the tenant
+joule get <name>        # Show capabilities deployed on a specific assistant
 joule status            # Check login status
 joule --version         # Check CLI version
 ```
+
+### Scenario description character limit
+
+The `description` field in `scenarios/invoke_agent.yaml` must be **≤ 1000 characters**.
+Exceeding this limit causes a compiler error:
+
+```
+$.description: may only be 1000 characters long
+```
+
+Keep scenario descriptions concise — use bullet points and short example phrases rather than
+full sentences for every trigger case.
 
 ---
 

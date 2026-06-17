@@ -265,9 +265,24 @@ joule login     # or joule login --use-env
 # Navigate to the joule-capability directory
 cd joule-capability
 
-# Compile + deploy
+# Compile + deploy to a custom assistant
 joule deploy ./da.sapdas.yaml --compile -n "<assistant_name>"
 ```
+
+**Deploying to `sap_digital_assistant` (the general/system assistant):**
+
+`joule deploy` returns error 5015 ("Request is not allowed") for system-managed assistants.
+Use `joule update` with `capability.sapdas.yaml` instead:
+
+```bash
+cd joule-capability
+joule update sap_digital_assistant --capability-file ./capability.sapdas.yaml
+```
+
+Verify with `joule get sap_digital_assistant`.
+
+> **Note:** The `description` field in `scenarios/invoke_agent.yaml` is limited to **1000 characters**.
+> Exceeding this limit causes a compiler error. Keep descriptions concise.
 
 ### Step 7: Test the Integration
 
